@@ -30,6 +30,19 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出RPA执行记录清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "robot", "total": total, "items": items}
+
+
+@router.get("/capacity/dispatch", response_model=dict)
+def robot_capacity_dispatch() -> dict[str, Any]:
+    """机器人执行读取的容量清单：按采集频率结果给出并发上限与可用容量。"""
+    return service.capacity_dispatch()
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
     """读取单条执行记录明细；不存在时给出可读的错误说明。"""
@@ -56,10 +69,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出RPA执行记录清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "robot", "total": total, "items": items}

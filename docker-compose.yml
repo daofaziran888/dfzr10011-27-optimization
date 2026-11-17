@@ -1,13 +1,29 @@
 services:
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        MIGRATION_VERSION: ${MIGRATION_VERSION:-2026.11.17-proxy-capacity-v2}
     ports:
       - "8000:8000"
     environment:
       - APP_ENV=local
+      - MIGRATION_VERSION=${MIGRATION_VERSION:-2026.11.17-proxy-capacity-v2}
+      - AUTO_MIGRATE=${AUTO_MIGRATE:-1}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        MIGRATION_VERSION: ${MIGRATION_VERSION:-2026.11.17-proxy-capacity-v2}
     ports:
       - "5173:5173"
+    environment:
+      - MIGRATION_VERSION=${MIGRATION_VERSION:-2026.11.17-proxy-capacity-v2}
+      - VITE_API_BASE=
     depends_on:
       - backend

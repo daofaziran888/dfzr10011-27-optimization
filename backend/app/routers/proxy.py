@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/proxy", tags=["采集代理路由"])
 
 service = ProxyService()
 
-LIST_FIELDS = ["配置编号", "代理地址", "代理协议", "区域标签", "可用比例", "切换阈值", "响应延迟", "配置状态"]
+LIST_FIELDS = ["配置编号", "代理地址", "代理协议", "区域标签", "可用比例", "切换阈值", "响应延迟", "并发上限", "配置状态"]
 STATUSES = ["草稿", "已启用", "已降级", "已关闭"]
 
 
@@ -28,6 +28,37 @@ def list_entries(
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
     items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出采集代理路由清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "proxy", "total": total, "items": items}
+
+
+@router.get("/capacity/review", response_model=dict)
+def capacity_review() -> dict[str, Any]:
+    """代理容量复核清单：新规则版本、并发上限、失败重试数与待执行计划数量。"""
+    return service.capacity_review()
+
+
+@router.get("/capacity/routing", response_model=dict)
+def capacity_routing() -> dict[str, Any]:
+    """代理路由按采集频率结果输出可用容量，供机器人执行读取。"""
+    return service.routing()
+
+
+@router.get("/capacity/queue", response_model=dict)
+def capacity_queue() -> dict[str, Any]:
+    """代理容量队列：待执行与已取消的并发调整计划。"""
+    return service.capacity_queue()
+
+
+@router.get("/capacity/robot-dispatch", response_model=dict)
+def capacity_robot_dispatch() -> dict[str, Any]:
+    """机器人执行读取入口，与代理路由、迁移清单共用同一容量口径。"""
+    return service.robot_dispatch()
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -56,10 +87,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出采集代理路由清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "proxy", "total": total, "items": items}

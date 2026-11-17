@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services.migration import migration_service
 from app.store import store
 
 MODULE = "datasource"
@@ -44,6 +45,7 @@ class DatasourceService:
         entry["pending"] = True
         entry["abnormal"] = False
         rows.append(entry)
+        self._notify_migration(entry)
         return entry, []
 
     def run_action(self, entry_id: int, action: str) -> tuple[dict[str, Any] | None, str]:
@@ -58,4 +60,9 @@ class DatasourceService:
         entry["status"] = target
         entry["pending"] = target != STATUS_ORDER[-1]
         entry["abnormal"] = action in NEGATIVE_ACTIONS
+        self._notify_migration(entry, action)
         return entry, f"数据源条目已{action}"
+
+    def _notify_migration(self, entry: dict[str, Any], action: str = "登记") -> None:
+        """业务入口变化后联动重算频率规则、容量队列和采集频率结果。"""
+        migration_service.on_business_entry_changed(MODULE, entry, action=action)

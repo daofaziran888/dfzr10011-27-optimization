@@ -1,0 +1,62 @@
+# 上线流水线：构建、迁移、部署都固定在同一个 MIGRATION_VERSION 上。
+# 版本只在仓库变量里改一处，避免出现镜像、数据库和本地示例各跑一套口径。
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  MIGRATION_VERSION: 2026.11.17-proxy-capacity-v2
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: 版本与构建自检
+        run: |
+          python -m app.version_check
+          python -m app.build_check
+      - name: 迁移预览（不落库）
+        run: python manage.py preview
+      - run: python -m unittest discover -s tests -v
+      - name: 迁移并校验
+        run: |
+          python manage.py migrate --allow-failures
+          python manage.py verify
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm run build
+
+  image:
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - name: 构建镜像（打入同一迁移版本）
+        run: |
+          docker build --build-arg MIGRATION_VERSION=${MIGRATION_VERSION} -t collection-backend:${MIGRATION_VERSION} backend
+          docker build --build-arg MIGRATION_VERSION=${MIGRATION_VERSION} -t collection-frontend:${MIGRATION_VERSION} frontend
+      - name: 部署前确认版本一致
+        run: |
+          docker run --rm collection-backend:${MIGRATION_VERSION} python -m app.build_check

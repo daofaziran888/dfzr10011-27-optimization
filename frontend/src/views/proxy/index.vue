@@ -3,7 +3,10 @@
     <header class="page-head">
       <div>
         <h2>采集代理路由管理</h2>
-        <p class="page-desc">维护采集代理的地址配置、区域标签与可用性监控，为采集代理路由提供可审计的数据工程流程。</p>
+        <p class="page-desc">
+          维护采集代理的地址配置、区域标签与可用性监控；代理容量按
+          floor(并发上限 × 可用比例 × 延迟系数) 计算，和频率规则、机器人下发共用同一口径。
+        </p>
       </div>
       <div class="page-actions">
         <button class="btn primary" type="button" @click="openCreate">登记代理配置</button>
@@ -17,6 +20,123 @@
         <strong class="stat-value">{{ item.value }}</strong>
       </article>
     </div>
+
+    <section class="panel">
+      <header class="panel-head">
+        <div>
+          <h3>代理容量清单</h3>
+          <p class="panel-desc">
+            迁移版本 {{ capacity.迁移版本 || '—' }} · 容量口径 {{ capacity.容量口径 || '—' }}
+          </p>
+        </div>
+        <div class="panel-actions">
+          <button class="btn" type="button" @click="reloadAll">刷新</button>
+        </div>
+      </header>
+      <p v-if="notice" class="notice-text">{{ notice }}</p>
+      <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
+
+      <h4 class="section-title">规则复核</h4>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>站点</th>
+            <th>状态</th>
+            <th>规则版本</th>
+            <th>结构版本</th>
+            <th>结果版本</th>
+            <th>并发上限</th>
+            <th>代理容量</th>
+            <th>失败重试数</th>
+            <th>待执行计划数量</th>
+            <th>可复核字段</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in reviewRows" :key="String(row.站点)">
+            <td>{{ row.目标站点 }}</td>
+            <td>{{ row.状态 }}</td>
+            <td>{{ row.规则版本 }}</td>
+            <td>{{ row.结构版本 }}</td>
+            <td>{{ row.结果版本 }}</td>
+            <td>{{ row.生效并发上限 }}（旧 {{ row.旧并发上限 }} / 新 {{ row.新并发上限 }}）</td>
+            <td>{{ row.代理容量 }}</td>
+            <td>{{ row.失败重试数 }}</td>
+            <td>{{ row.待执行计划数量 }}</td>
+            <td>{{ (row.可复核字段 || []).join('、') }}</td>
+          </tr>
+          <tr v-if="!reviewRows.length">
+            <td colspan="10" class="empty-state">还没有频率结果，可先到采集频率控制执行迁移</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h4 class="section-title">代理配置容量</h4>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>配置编号</th>
+            <th>区域标签</th>
+            <th>可用比例</th>
+            <th>响应延迟</th>
+            <th>并发上限</th>
+            <th>可用容量</th>
+            <th>配置状态</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in proxyRows" :key="String(row.配置编号)">
+            <td>{{ row.配置编号 }}</td>
+            <td>{{ row.区域标签 }}</td>
+            <td>{{ row.可用比例 }}</td>
+            <td>{{ row.响应延迟 }}ms</td>
+            <td>{{ row.并发上限 }}</td>
+            <td>{{ row.可用容量 }}</td>
+            <td>{{ row.配置状态 }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <header class="panel-head">
+        <div>
+          <h3>代理路由输出</h3>
+          <p class="panel-desc">按采集频率结果输出可用容量，机器人执行从这里读取。</p>
+        </div>
+      </header>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>站点</th>
+            <th>区域</th>
+            <th>可用容量</th>
+            <th>生效并发上限</th>
+            <th>请求间隔</th>
+            <th>日配额上限</th>
+            <th>结果版本</th>
+            <th>待执行计划数量</th>
+            <th>可执行</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="row in dispatchRows" :key="String(row.站点)">
+            <td>{{ row.站点 }}</td>
+            <td>{{ row.区域标签 }}</td>
+            <td>{{ row.可用容量 }}</td>
+            <td>{{ row.并发上限 }}</td>
+            <td>{{ row.请求间隔 }}s</td>
+            <td>{{ row.日配额上限 }}</td>
+            <td>{{ row.结果版本 }}</td>
+            <td>{{ row.待执行计划数量 }}</td>
+            <td>{{ row.可执行 ? '是' : '待复核' }}</td>
+          </tr>
+          <tr v-if="!dispatchRows.length">
+            <td colspan="9" class="empty-state">暂无代理路由输出，可先执行迁移</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
 
     <form class="filter-bar" @submit.prevent="reload">
       <label v-for="field in filterFields" :key="field" class="filter-item">
@@ -63,23 +183,32 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
-import { request } from '@/api/client'
+import { fetchJson, request } from '@/api/client'
 
 type Row = Record<string, string | number | null>
+type AnyRow = Record<string, any>
 
 const ENDPOINT = '/api/proxy'
-const columns = ["配置编号", "代理地址", "代理协议", "区域标签", "可用比例", "切换阈值", "响应延迟", "配置状态"]
+const columns = ["配置编号", "代理地址", "代理协议", "区域标签", "可用比例", "切换阈值", "响应延迟", "并发上限", "配置状态"]
 const actions = ["启用代理", "降级代理", "关闭代理"]
-const statuses = ["草稿", "已启用", "已降级", "已关闭"]
-const stats = [{"label": "代理配置总数", "value": 0}, {"label": "已启用代理", "value": 0}, {"label": "已降级代理", "value": 0}]
+const stats = ref([
+  { label: '代理配置总数', value: 0 },
+  { label: '已启用代理', value: 0 },
+  { label: '可用容量合计', value: 0 },
+])
 
 const rows = ref<Row[]>([])
 const total = ref(0)
 const errorMessage = ref('')
+const notice = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+const capacity = ref<AnyRow>({})
+const reviewRows = computed<AnyRow[]>(() => capacity.value.规则复核 ?? [])
+const proxyRows = computed<AnyRow[]>(() => capacity.value.代理配置 ?? [])
+const dispatchRows = ref<AnyRow[]>([])
 
 function resetFilters() {
   filters.value = {}
@@ -104,9 +233,32 @@ async function runAction(action: string, row: Row) {
     if (!response.ok) {
       throw new Error('采集代理路由动作未生效，请稍后重试')
     }
-    await reload()
+    const payload = await response.json()
+    notice.value = payload.message ?? ''
+    await reloadAll()
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '采集代理路由操作失败'
+  }
+}
+
+async function reloadAll() {
+  await Promise.all([reload(), loadCapacity(), loadDispatch()])
+}
+
+async function loadCapacity() {
+  try {
+    capacity.value = await fetchJson<AnyRow>(`${ENDPOINT}/capacity/review`)
+  } catch {
+    capacity.value = {}
+  }
+}
+
+async function loadDispatch() {
+  try {
+    const payload = await fetchJson<AnyRow>(`${ENDPOINT}/capacity/robot-dispatch`)
+    dispatchRows.value = payload.items ?? []
+  } catch {
+    dispatchRows.value = []
   }
 }
 
@@ -121,10 +273,40 @@ async function reload() {
     const payload = await response.json()
     rows.value = payload.items ?? []
     total.value = payload.total ?? rows.value.length
+    stats.value = [
+      { label: '代理配置总数', value: payload.total ?? rows.value.length },
+      { label: '已启用代理', value: rows.value.filter((row) => row.配置状态 === '已启用').length },
+      {
+        label: '可用容量合计',
+        value: proxyRows.value.reduce((sum: number, row: AnyRow) => sum + Number(row.可用容量 ?? 0), 0),
+      },
+    ]
   } catch (error) {
     errorMessage.value = error instanceof Error ? error.message : '采集代理路由列表读取失败'
   }
 }
 
-onMounted(reload)
+onMounted(reloadAll)
 </script>
+
+<style scoped>
+.panel {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.panel-head h3 { margin: 0; font-size: 15px; }
+.panel-desc { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.panel-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.section-title { font-size: 13px; margin: 12px 0 6px; color: var(--muted); }
+.notice-text { color: #1f6feb; font-size: 12px; margin: 4px 0; }
+</style>

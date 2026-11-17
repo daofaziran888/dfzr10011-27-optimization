@@ -1,4 +1,8 @@
-"""采集频率控制接口：维护频率规则，覆盖启用规则、暂停规则、关闭规则等动作。"""
+"""采集频率控制接口：维护频率规则，覆盖启用规则、暂停规则、关闭规则等动作。
+
+迁移、重算、容量复核与历史回填的接口在 `/api/migration`，这里保留入口说明，
+避免同一份频率结果在两条路径里各算一套。
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -6,13 +10,26 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
+from app.services.migration import MIGRATION_VERSION, migration_service
 from app.services.ratelimit import RatelimitService
 
 router = APIRouter(prefix="/api/ratelimit", tags=["采集频率控制"])
 
 service = RatelimitService()
 
-LIST_FIELDS = ["规则编号", "目标站点", "请求间隔", "并发上限", "日配额上限", "优先级调整", "生效时段", "规则状态"]
+LIST_FIELDS = [
+    "规则编号",
+    "目标站点",
+    "请求间隔",
+    "并发上限",
+    "日配额上限",
+    "优先级调整",
+    "生效时段",
+    "规则状态",
+    "规则版本",
+    "代理容量",
+    "迁移状态",
+]
 STATUSES = ["草稿", "已生效", "已暂停", "已关闭"]
 
 
@@ -30,13 +47,11 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
-@router.get("/{entry_id}", response_model=dict)
-def get_entry(entry_id: int) -> dict:
-    """读取单条频率规则明细；不存在时给出可读的错误说明。"""
-    entry = service.get_entry(entry_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"频率规则 {entry_id} 不存在或已归档")
-    return entry
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出采集频率控制清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "ratelimit", "total": total, "items": items, "migration_version": MIGRATION_VERSION}
 
 
 @router.post("", response_model=ActionResult)
@@ -46,6 +61,15 @@ def create_entry(payload: EntryPayload) -> ActionResult:
     if missing:
         return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
     return ActionResult(ok=True, message="频率规则已登记", entry=entry)
+
+
+@router.get("/{entry_id}", response_model=dict)
+def get_entry(entry_id: int) -> dict:
+    """读取单条频率规则明细；不存在时给出可读的错误说明。"""
+    entry = service.get_entry(entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"频率规则 {entry_id} 不存在或已归档")
+    return entry
 
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
@@ -58,8 +82,24 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     return ActionResult(ok=True, message=message, entry=entry)
 
 
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出采集频率控制清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "ratelimit", "total": total, "items": items}
+@router.get("/{entry_id}/migration", response_model=dict)
+def entry_migration(entry_id: int) -> dict:
+    """单条规则的迁移轨迹：原值/新值、当前频率结果和历史记录。"""
+    entry = service.trace(entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"频率规则 {entry_id} 不存在或已归档")
+    return entry
+
+
+@router.post("/{entry_id}/migration/recalculate", response_model=ActionResult)
+def recalculate_entry(entry_id: int, payload: EntryPayload) -> ActionResult:
+    """重算单条规则的采集频率；同一站点只会发布最后确认的版本。"""
+    submission_id = str(payload.values.get("submission_id") or "").strip() or None
+    entry, message = migration_service.recalculate(
+        entry_id,
+        actor=str(payload.values.get("actor") or "值班管理员"),
+        submission_id=submission_id,
+    )
+    if entry is None:
+        return ActionResult(ok=False, message=message)
+    return ActionResult(ok=True, message=message, entry=entry)
